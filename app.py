@@ -71,6 +71,31 @@ def fetch_nfl_state() -> dict:
 
 
 @st.cache_data(ttl=60 * 10, show_spinner=False)
+def fetch_sleeper_projections(season: str, week: int) -> dict:
+    """Maps player_id (str) -> projected fantasy points (PPR) for the given week."""
+    try:
+        resp = requests.get(
+            f"https://api.sleeper.app/projections/nfl/{season}/{week}",
+            params={"season_type": "regular"},
+            timeout=20,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.RequestException:
+        return {}
+
+    projections = {}
+    for entry in data or []:
+        pid = entry.get("player_id")
+        if pid is None:
+            continue
+        pts = (entry.get("stats") or {}).get("pts_ppr")
+        if pts is not None:
+            projections[str(pid)] = pts
+    return projections
+
+
+@st.cache_data(ttl=60 * 10, show_spinner=False)
 def fetch_sleeper_rosters(username: str, season: str) -> list[dict]:
     user_resp = requests.get(f"{SLEEPER_BASE}/user/{username}", timeout=15)
     user_resp.raise_for_status()
@@ -85,6 +110,7 @@ def fetch_sleeper_rosters(username: str, season: str) -> list[dict]:
 
     players_db = fetch_sleeper_players()
     week = fetch_nfl_state().get("week", 1)
+    projections = fetch_sleeper_projections(season, week)
 
     results = []
     for league in leagues:
@@ -131,6 +157,7 @@ def fetch_sleeper_rosters(username: str, season: str) -> list[dict]:
                     "nfl_team": meta.get("team") or "FA",
                     "injury_status": (meta.get("injury_status") or "ACTIVE").upper() or "ACTIVE",
                     "points": (points_map or {}).get(pid, 0.0),
+                    "projected": projections.get(str(pid)),
                 })
             return out
 
@@ -268,9 +295,12 @@ def leagues_to_dataframe(all_leagues: list[dict]) -> pd.DataFrame:
                 "Platform": lg["platform"],
                 "Injury Status": p.get("injury_status", "ACTIVE"),
                 "Points": p.get("points", 0.0) or 0.0,
+                "Projected": p.get("projected"),
             })
     if not rows:
-        return pd.DataFrame(columns=["Player", "Position", "NFL Team", "League", "Platform", "Injury Status", "Points"])
+        return pd.DataFrame(
+            columns=["Player", "Position", "NFL Team", "League", "Platform", "Injury Status", "Points", "Projected"]
+        )
     return pd.DataFrame(rows)
 
 
@@ -492,6 +522,7 @@ def main():
 
         display_df = filtered.copy()
         display_df["Injury Status"] = display_df["Injury Status"].apply(status_badge)
+        display_df["Projected"] = display_df["Projected"].apply(lambda v: f"{v:.1f}" if pd.notna(v) else "—")
         st.dataframe(display_df, use_container_width=True, hide_index=True)
 
     with tab2:
@@ -555,7 +586,12 @@ def main():
                 c3.metric("Opponent Score", f"{opp_pts:.1f}" if isinstance(opp_pts, (int, float)) else "—")
                 if lg["players"]:
                     roster_df = pd.DataFrame([
-                        {"Player": p["name"], "Position": p.get("position", "?"), "Points": p.get("points", 0.0)}
+                        {
+                            "Player": p["name"],
+                            "Position": p.get("position", "?"),
+                            "Points": p.get("points", 0.0),
+                            "Projected": p.get("projected") if p.get("projected") is not None else "—",
+                        }
                         for p in lg["players"]
                     ])
                     st.dataframe(roster_df, use_container_width=True, hide_index=True)
