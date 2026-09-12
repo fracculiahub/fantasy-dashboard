@@ -27,20 +27,30 @@ def get_authorization_url(client_id: str, redirect_uri: str) -> str:
     return f"{AUTH_URL}?{urlencode(params)}"
 
 
+def _raise_with_body(resp: requests.Response) -> None:
+    if not resp.ok:
+        raise requests.HTTPError(
+            f"{resp.status_code} {resp.reason} for url {resp.url}\nYahoo response body: {resp.text[:1000]}",
+            response=resp,
+        )
+
+
 def exchange_code_for_tokens(code: str, client_id: str, client_secret: str, redirect_uri: str) -> dict:
+    # Yahoo's token endpoint expects client credentials via HTTP Basic Auth,
+    # not as POST body fields — sending only body params silently yields a
+    # token that later 401s on real API calls.
     resp = requests.post(
         TOKEN_URL,
         data={
-            "client_id": client_id,
-            "client_secret": client_secret,
             "redirect_uri": redirect_uri,
             "code": code,
             "grant_type": "authorization_code",
         },
+        auth=(client_id, client_secret),
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         timeout=15,
     )
-    resp.raise_for_status()
+    _raise_with_body(resp)
     data = resp.json()
     data["obtained_at"] = time.time()
     return data
@@ -50,16 +60,15 @@ def refresh_access_token(refresh_token: str, client_id: str, client_secret: str,
     resp = requests.post(
         TOKEN_URL,
         data={
-            "client_id": client_id,
-            "client_secret": client_secret,
             "redirect_uri": redirect_uri,
             "refresh_token": refresh_token,
             "grant_type": "refresh_token",
         },
+        auth=(client_id, client_secret),
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         timeout=15,
     )
-    resp.raise_for_status()
+    _raise_with_body(resp)
     data = resp.json()
     data["obtained_at"] = time.time()
     if "refresh_token" not in data:
@@ -89,7 +98,7 @@ def _get(endpoint: str, access_token: str) -> dict:
         params={"format": "json"},
         timeout=20,
     )
-    resp.raise_for_status()
+    _raise_with_body(resp)
     return resp.json()
 
 
