@@ -7,6 +7,7 @@ cross-league conflicts, injury news, and a live scoreboard.
 
 from __future__ import annotations
 
+import re
 import time
 
 import pandas as pd
@@ -31,6 +32,16 @@ STATUS_EMOJI = {
     "NA": "⚪",
 }
 SEVERITY_ORDER = {"OUT": 0, "IR": 0, "PUP": 0, "SUSPENDED": 0, "DOUBTFUL": 1, "QUESTIONABLE": 2}
+
+
+def parse_espn_league_id(raw: str) -> str:
+    """Tolerates a bare ID, a 'leagueId=123' fragment, or a full ESPN URL."""
+    raw = (raw or "").strip()
+    match = re.search(r"leagueId=(\d+)", raw)
+    if match:
+        return match.group(1)
+    digits = re.sub(r"\D", "", raw)
+    return digits or raw
 
 
 def get_secrets_section(section: str) -> dict:
@@ -322,7 +333,12 @@ def render_sidebar():
 
     st.sidebar.divider()
     st.sidebar.subheader("ESPN")
-    espn_league_id = st.sidebar.text_input("ESPN League ID", value=st.session_state.get("espn_league_id", ""))
+    espn_league_id = st.sidebar.text_input(
+        "ESPN League ID",
+        value=st.session_state.get("espn_league_id", ""),
+        placeholder="e.g. 720554938",
+        help="Just the numeric ID — pasting the full URL or 'leagueId=...' also works.",
+    )
     espn_team_filter = st.sidebar.text_input("Your team name (filter)", value=st.session_state.get("espn_team_filter", ""))
     st.session_state["espn_league_id"] = espn_league_id
     st.session_state["espn_team_filter"] = espn_team_filter
@@ -397,7 +413,7 @@ def load_all_leagues(cfg: dict) -> list[dict]:
     if cfg["espn_league_id"] and cfg["espn_secrets"].get("espn_s2") and cfg["espn_secrets"].get("swid"):
         try:
             espn_data = fetch_espn_rosters(
-                cfg["espn_league_id"],
+                parse_espn_league_id(cfg["espn_league_id"]),
                 cfg["season"],
                 cfg["espn_secrets"]["espn_s2"],
                 cfg["espn_secrets"]["swid"],
@@ -495,7 +511,11 @@ def main():
         if exposure.empty:
             st.info("No cross-league ownership overlaps detected.")
         else:
-            st.dataframe(exposure.rename(columns={"League_List": "Leagues"}), use_container_width=True, hide_index=True)
+            st.dataframe(
+                exposure.rename(columns={"Leagues": "League Count", "League_List": "Leagues"}),
+                use_container_width=True,
+                hide_index=True,
+            )
 
         st.subheader("Matchup Conflicts")
         st.caption("A player you own in one league who is rostered by your opponent in another league this week.")
