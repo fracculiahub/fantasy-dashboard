@@ -7,6 +7,7 @@ cross-league conflicts, injury news, and a live scoreboard.
 
 from __future__ import annotations
 
+import json
 import re
 import time
 
@@ -14,12 +15,15 @@ import pandas as pd
 import plotly.express as px
 import requests
 import streamlit as st
+from streamlit_local_storage import LocalStorage
 
 import yahoo_auth
 
 st.set_page_config(page_title="Fantasy Command Center", page_icon="🏈", layout="wide")
 
 SLEEPER_BASE = "https://api.sleeper.app/v1"
+PROFILE_STORAGE_KEY = "fantasy_dashboard_profile"
+PROFILE_FIELDS = ("sleeper_username", "espn_league_id", "espn_team_filter", "espn_s2", "espn_swid")
 
 STATUS_EMOJI = {
     "ACTIVE": "🟢",
@@ -50,6 +54,54 @@ def get_secrets_section(section: str) -> dict:
         return dict(st.secrets.get(section, {}))
     except Exception:
         return {}
+
+
+# --------------------------------------------------------------------------
+# Per-browser profile persistence (localStorage)
+#
+# Each visitor's Sleeper username, ESPN league/cookies, and Yahoo tokens are
+# saved only in their own browser's localStorage — there is no server-side
+# account system. This is what lets multiple people share one deployed app
+# URL without seeing each other's leagues or credentials.
+# --------------------------------------------------------------------------
+
+def hydrate_profile_from_storage(local_storage: LocalStorage) -> None:
+    if st.session_state.get("_profile_hydrated"):
+        return
+    st.session_state["_profile_hydrated"] = True
+
+    raw = local_storage.getItem(PROFILE_STORAGE_KEY)
+    if not raw:
+        return
+    try:
+        profile = json.loads(raw)
+    except (TypeError, ValueError):
+        return
+
+    for field in PROFILE_FIELDS:
+        if profile.get(field) and field not in st.session_state:
+            st.session_state[field] = profile[field]
+    if profile.get("yahoo_tokens") and "yahoo_tokens" not in st.session_state:
+        st.session_state["yahoo_tokens"] = profile["yahoo_tokens"]
+
+
+def save_profile_to_storage(local_storage: LocalStorage, cfg: dict) -> None:
+    profile = {field: cfg.get(field, "") for field in PROFILE_FIELDS}
+    profile["yahoo_tokens"] = st.session_state.get("yahoo_tokens")
+
+    snapshot = json.dumps(profile, sort_keys=True)
+    if st.session_state.get("_profile_last_saved") == snapshot:
+        return
+    local_storage.setItem(PROFILE_STORAGE_KEY, snapshot, key="save_profile")
+    st.session_state["_profile_last_saved"] = snapshot
+
+
+def clear_saved_profile(local_storage: LocalStorage) -> None:
+    local_storage.deleteItem(PROFILE_STORAGE_KEY, key="clear_profile")
+    for field in PROFILE_FIELDS:
+        st.session_state.pop(field, None)
+    st.session_state.pop("yahoo_tokens", None)
+    st.session_state.pop("_profile_last_saved", None)
 
 
 # --------------------------------------------------------------------------
@@ -350,7 +402,7 @@ def compute_conflicts(all_leagues: list[dict]) -> pd.DataFrame:
 # Sidebar
 # --------------------------------------------------------------------------
 
-def render_sidebar():
+def render_sidebar(local_storage: LocalStorage):
     st.sidebar.title("🏈 League Connections")
 
     season = st.sidebar.number_input("Season", min_value=2018, max_value=2035, value=2026, step=1)
@@ -370,11 +422,19 @@ def render_sidebar():
         help="Just the numeric ID — pasting the full URL or 'leagueId=...' also works.",
     )
     espn_team_filter = st.sidebar.text_input("Your team name (filter)", value=st.session_state.get("espn_team_filter", ""))
+    espn_s2 = st.sidebar.text_input(
+        "ESPN espn_s2 cookie", value=st.session_state.get("espn_s2", ""), type="password"
+    )
+    espn_swid = st.sidebar.text_input(
+        "ESPN SWID cookie", value=st.session_state.get("espn_swid", ""), type="password"
+    )
+    st.sidebar.caption("Saved only in your browser — see README for how to extract these cookies.")
     st.session_state["espn_league_id"] = espn_league_id
     st.session_state["espn_team_filter"] = espn_team_filter
-    espn_secrets = get_secrets_section("espn")
-    espn_ready = bool(espn_league_id) and bool(espn_secrets.get("espn_s2")) and bool(espn_secrets.get("swid"))
-    st.sidebar.caption("✅ Connected" if espn_ready else "❌ Not connected (needs League ID + cookies in Secrets)")
+    st.session_state["espn_s2"] = espn_s2
+    st.session_state["espn_swid"] = espn_swid
+    espn_ready = bool(espn_league_id) and bool(espn_s2) and bool(espn_swid)
+    st.sidebar.caption("✅ Connected" if espn_ready else "❌ Not connected (needs League ID + both cookies)")
 
     st.sidebar.divider()
     st.sidebar.subheader("Yahoo")
@@ -415,12 +475,17 @@ def render_sidebar():
         fetch_nfl_state.clear()
         st.rerun()
 
+    if st.sidebar.button("🗑️ Clear saved settings for this browser", use_container_width=True):
+        clear_saved_profile(local_storage)
+        st.rerun()
+
     return {
         "season": season,
         "sleeper_username": sleeper_username,
         "espn_league_id": espn_league_id,
         "espn_team_filter": espn_team_filter,
-        "espn_secrets": espn_secrets,
+        "espn_s2": espn_s2,
+        "espn_swid": espn_swid,
         "yahoo_client_id": yahoo_client_id,
         "yahoo_client_secret": yahoo_client_secret,
         "yahoo_redirect_uri": yahoo_redirect_uri,
@@ -440,13 +505,13 @@ def load_all_leagues(cfg: dict) -> list[dict]:
         except requests.RequestException as e:
             st.warning(f"Sleeper fetch failed: {e}")
 
-    if cfg["espn_league_id"] and cfg["espn_secrets"].get("espn_s2") and cfg["espn_secrets"].get("swid"):
+    if cfg["espn_league_id"] and cfg["espn_s2"] and cfg["espn_swid"]:
         try:
             espn_data = fetch_espn_rosters(
                 parse_espn_league_id(cfg["espn_league_id"]),
                 cfg["season"],
-                cfg["espn_secrets"]["espn_s2"],
-                cfg["espn_secrets"]["swid"],
+                cfg["espn_s2"],
+                cfg["espn_swid"],
                 cfg["espn_team_filter"],
             )
             if espn_data:
@@ -472,10 +537,14 @@ def load_all_leagues(cfg: dict) -> list[dict]:
 # --------------------------------------------------------------------------
 
 def main():
-    cfg = render_sidebar()
+    local_storage = LocalStorage()
+    hydrate_profile_from_storage(local_storage)
+
+    cfg = render_sidebar(local_storage)
     st.title("🏈 Fantasy Football Command Center")
 
     all_leagues = load_all_leagues(cfg)
+    save_profile_to_storage(local_storage, cfg)
     df = leagues_to_dataframe(all_leagues)
 
     # KPI cards
