@@ -65,19 +65,28 @@ def get_secrets_section(section: str) -> dict:
 # URL without seeing each other's leagues or credentials.
 # --------------------------------------------------------------------------
 
+def _load_profile_dict(local_storage: LocalStorage) -> dict:
+    raw = local_storage.getItem(PROFILE_STORAGE_KEY)
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+
+
 def hydrate_profile_from_storage(local_storage: LocalStorage) -> None:
+    # Only runs once per session (a fresh page load / reload starts a new
+    # session, which is exactly when this needs to re-read localStorage).
+    # streamlit_local_storage caches its browser round-trip in
+    # st.session_state and does not reliably re-fetch mid-session even via
+    # refreshItems(), so there's no reliable way to pick up a token saved by
+    # another tab without a reload — see the Connect Yahoo caption.
     if st.session_state.get("_profile_hydrated"):
         return
     st.session_state["_profile_hydrated"] = True
 
-    raw = local_storage.getItem(PROFILE_STORAGE_KEY)
-    if not raw:
-        return
-    try:
-        profile = json.loads(raw)
-    except (TypeError, ValueError):
-        return
-
+    profile = _load_profile_dict(local_storage)
     for field in PROFILE_FIELDS:
         if profile.get(field) and field not in st.session_state:
             st.session_state[field] = profile[field]
@@ -464,18 +473,22 @@ def render_sidebar(local_storage: LocalStorage):
 
         auth_url = yahoo_auth.get_authorization_url(yahoo_client_id, yahoo_redirect_uri)
         st.sidebar.markdown(
-            # target="_top" (not "_self") because Streamlit Community Cloud
-            # renders the whole app inside its own iframe wrapper. Yahoo's
-            # login page refuses to render inside any iframe (anti-clickjacking),
-            # so "_self" navigation gets silently blocked — "_top" breaks out
-            # of the iframe and navigates the whole tab instead.
-            f'<a href="{auth_url}" target="_top" '
+            # Streamlit Community Cloud renders the whole app inside its own
+            # sandboxed iframe with no allow-top-navigation flag, so both
+            # target="_top" and target="_self" get silently blocked by the
+            # browser (confirmed via console: "sandboxed... allow-top-navigation
+            # ... is not set"). target="_blank" opens a real new tab instead,
+            # which only needs allow-popups — not subject to that restriction.
+            f'<a href="{auth_url}" target="_blank" '
             f'style="display:inline-block;padding:0.4rem 0.8rem;border-radius:0.4rem;'
             f'background-color:#2ecc71;color:#0e1117;font-weight:600;text-decoration:none;">'
             f"🔗 Connect Yahoo</a>",
             unsafe_allow_html=True,
         )
-        st.sidebar.caption("❌ Not connected — click the button above")
+        st.sidebar.caption(
+            "❌ Not connected — opens Yahoo in a new tab. After authorizing there, "
+            "**reload this page** (not just Sync) to pick up the connection."
+        )
 
     st.sidebar.divider()
     if st.sidebar.button("🔄 Sync All Platforms", use_container_width=True):
