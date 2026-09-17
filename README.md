@@ -29,7 +29,9 @@ Consolidates your rosters from **Sleeper** (2 leagues) and **ESPN** (1 league) i
      espn_swid text default ''
    );
    ```
-3. Go to **Project Settings → API Keys**, and select the **"Publishable and secret API keys"** tab. Copy the **Project URL** and the **secret key** (starts with `sb_secret_...`) — not the publishable key. The secret key is what lets the app read/write the table; it's never exposed to visitors' browsers since only the server-side Streamlit app uses it.
+3. The URL and key are on two different pages:
+   - **URL**: left sidebar → **Integrations → Data API → Overview**. Copy the **"API URL"** field (looks like `https://your-project-ref.supabase.co/rest/v1/`) — either with or without the `/rest/v1/` part is fine, the app normalizes it either way.
+   - **Secret key**: left sidebar → **Project Settings → API Keys** (defaults to the **"Publishable and secret API keys"** tab). Under **Secret keys**, click **Reveal** and copy the key starting `sb_secret_...` — not the publishable key. This is what lets the app read/write the table; it's never exposed to visitors' browsers since only the server-side Streamlit app uses it.
 
 ## 2. Set up the platforms
 

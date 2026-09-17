@@ -37,7 +37,13 @@ def _headers(secret_key: str, prefer: str | None = None) -> dict:
 
 
 def _base_url(supabase_url: str) -> str:
-    return f"{supabase_url.rstrip('/')}/rest/v1/{TABLE}"
+    # Supabase's dashboard (Integrations -> Data API) shows the "API URL"
+    # with /rest/v1/ already appended, but the bare project URL also works
+    # -- accept either so a verbatim copy-paste from either place is safe.
+    base = supabase_url.rstrip("/")
+    if base.endswith("/rest/v1"):
+        base = base[: -len("/rest/v1")]
+    return f"{base}/rest/v1/{TABLE}"
 
 
 def hash_password(password: str, salt: str | None = None) -> tuple[str, str]:
