@@ -464,7 +464,12 @@ def render_sidebar(local_storage: LocalStorage):
 
         auth_url = yahoo_auth.get_authorization_url(yahoo_client_id, yahoo_redirect_uri)
         st.sidebar.markdown(
-            f'<a href="{auth_url}" target="_self" '
+            # target="_top" (not "_self") because Streamlit Community Cloud
+            # renders the whole app inside its own iframe wrapper. Yahoo's
+            # login page refuses to render inside any iframe (anti-clickjacking),
+            # so "_self" navigation gets silently blocked — "_top" breaks out
+            # of the iframe and navigates the whole tab instead.
+            f'<a href="{auth_url}" target="_top" '
             f'style="display:inline-block;padding:0.4rem 0.8rem;border-radius:0.4rem;'
             f'background-color:#2ecc71;color:#0e1117;font-weight:600;text-decoration:none;">'
             f"🔗 Connect Yahoo</a>",
