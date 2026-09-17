@@ -462,7 +462,12 @@ def render_sidebar(local_storage: LocalStorage):
     else:
         query_params = st.query_params
         code = query_params.get("code")
-        if code and not st.session_state.get("yahoo_tokens"):
+        oauth_error = query_params.get("error")
+        if oauth_error:
+            st.sidebar.error(
+                f"Yahoo returned an error: {oauth_error} — {query_params.get('error_description', '')}"
+            )
+        elif code and not st.session_state.get("yahoo_tokens"):
             try:
                 tokens = yahoo_auth.exchange_code_for_tokens(code, yahoo_client_id, yahoo_client_secret, yahoo_redirect_uri)
                 st.session_state["yahoo_tokens"] = tokens
