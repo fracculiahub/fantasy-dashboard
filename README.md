@@ -1,14 +1,14 @@
 # 🏈 Fantasy Football Multi-League Dashboard
 
-Consolidates your rosters from **Sleeper** (2 leagues), **ESPN** (1 league), and **Yahoo** (1 league) into one Streamlit dashboard: master roster, player exposure across leagues, cross-league matchup conflicts, injury news, and a live scoreboard.
+Consolidates your rosters from **Sleeper** (2 leagues) and **ESPN** (1 league) into one Streamlit dashboard: master roster, player exposure across leagues, cross-league matchup conflicts, injury news, and a live scoreboard.
 
-**Multiple people can use the same deployed app.** Every visitor's Sleeper username, ESPN league ID/cookies, and Yahoo login are saved only in *their own browser* (via localStorage) — there's no shared account system, so friends/family can each connect their own leagues on the same URL without seeing your data or you seeing theirs. Settings persist across reloads automatically; there's a "🗑️ Clear saved settings for this browser" button in the sidebar to wipe them.
+**Multiple people can use the same deployed app.** Every visitor's Sleeper username and ESPN league ID/cookies are saved only in *their own browser* (via localStorage) — there's no shared account system, so friends/family can each connect their own leagues on the same URL without seeing your data or you seeing theirs. Settings persist across reloads automatically; there's a "🗑️ Clear saved settings for this browser" button in the sidebar to wipe them.
 
 ## Prerequisites
 
 - Python 3.10+
 - A GitHub account (for deploying to Streamlit Community Cloud)
-- Accounts on Sleeper, ESPN Fantasy, and Yahoo Fantasy with active leagues
+- Accounts on Sleeper and ESPN Fantasy with active leagues
 
 ## 1. One-time setup per platform
 
@@ -22,19 +22,6 @@ Nothing to configure ahead of time — just have your Sleeper **username** ready
 4. Paste them directly into the **ESPN espn_s2 cookie** / **ESPN SWID cookie** fields in the app's sidebar (each person using the app enters their own — these are saved to your browser only, never a shared secret).
 5. You'll also need your ESPN **League ID** — it's the numeric `leagueId` in the URL when viewing your league on fantasy.espn.com. The League ID field also accepts the full URL or a pasted `leagueId=...` fragment.
 
-### Yahoo — create a free Developer App
-This part is shared infrastructure — one person (the app owner) sets this up once; everyone using the app authorizes individually against it afterward.
-
-1. Go to [developer.yahoo.com/apps/create](https://developer.yahoo.com/apps/create/).
-2. Fill in:
-   - **Application Name**: `Fantasy Dashboard`
-   - **Redirect URI(s)**: `https://your-app.streamlit.app` for the deployed app, or `http://localhost:8501` for local dev. (You can list both, one per line, and switch which one you put in secrets depending on where you're running.)
-3. Under **API Permissions**, select **Fantasy Sports** → **Read**.
-4. Save, then copy the **Client ID** and **Client Secret**.
-5. Paste them into Streamlit Cloud Secrets (see below) — this is the only credential that stays server-side/shared, because it identifies the *application*, not any individual person.
-
-Each visitor (including friends/family) then clicks **Connect Yahoo** in the app's sidebar, authorizes in their own browser with their own Yahoo login, and gets their own access/refresh tokens — saved to their own browser, not shared with anyone else using the app.
-
 ### GitHub
 Create a repository named `fantasy-dashboard` (public or private — Streamlit Cloud works with either, private just requires connecting your GitHub account).
 
@@ -44,14 +31,7 @@ Create a repository named `fantasy-dashboard` (public or private — Streamlit C
 pip install -r requirements.txt
 ```
 
-Create `.streamlit/secrets.toml` (this file is gitignored — never commit it) with just the Yahoo app identity — ESPN cookies now go in the sidebar, not secrets:
-
-```toml
-[yahoo]
-client_id = "paste-your-yahoo-client-id"
-client_secret = "paste-your-yahoo-client-secret"
-redirect_uri = "http://localhost:8501"
-```
+No `secrets.toml` is required to run locally — everything (Sleeper username, ESPN League ID + cookies) is entered directly in the sidebar and saved to your browser.
 
 Run it:
 
@@ -59,30 +39,27 @@ Run it:
 streamlit run app.py
 ```
 
-In the sidebar: enter your Sleeper username, your ESPN League ID + cookies (+ optional team name filter if the league has multiple teams you're unsure how to pick between), and click **Connect Yahoo**. These get saved to your browser automatically — no need to re-enter them next time.
+In the sidebar: enter your Sleeper username, and your ESPN League ID + cookies (+ optional team name filter if the league has multiple teams you're unsure how to pick between). These get saved to your browser automatically — no need to re-enter them next time.
 
 ## 3. Deploy to Streamlit Community Cloud
 
 1. Push this repo to `github.com/<you>/fantasy-dashboard`.
 2. Go to [share.streamlit.io](https://share.streamlit.io) → **New app** → pick your repo, branch `main`, main file `app.py`.
-3. In **Advanced settings → Secrets**, paste the `[yahoo]` block above, but set `redirect_uri` to your deployed URL, e.g. `https://your-app.streamlit.app`.
-4. Deploy. Update the Redirect URI in your Yahoo Developer App settings to match if you change your app's URL later.
-5. Share the app URL with friends/family — each person enters their own Sleeper username and ESPN cookies in the sidebar (saved to their browser only) and clicks Connect Yahoo to authorize individually.
+3. Deploy — no secrets needed.
+4. Share the app URL with friends/family — each person enters their own Sleeper username and ESPN cookies in the sidebar, saved to their browser only.
 
 ## Notes & known quirks
 
-- **Yahoo's raw API JSON** is deeply nested with numeric-string keys and varies slightly by endpoint. `yahoo_auth.py` parses it defensively; if a league doesn't show up, it likely means Yahoo changed a response shape — the fetch functions fail closed (return empty lists) rather than crashing the app.
 - **ESPN cookies expire** every ~365 days (or sooner if you log out elsewhere) — if ESPN stops loading, re-extract `espn_s2` and `SWID` and re-paste them in the sidebar.
 - **Saved settings live in browser localStorage**, not on any server — clearing your browser's site data for this app, or opening it in a different browser/private window, means re-entering everything once.
-- **Matchup conflicts** for Yahoo require an extra API call per league to find your opponent — this is best-effort and may not populate every week.
 - Streamlit Cloud **does not run background jobs**, so "live" scores update whenever you (or your browser tab) refresh/reload — there's no server-side polling.
+- **Yahoo Fantasy is not supported.** Yahoo discontinued self-serve Fantasy Sports API access in 2026 — new apps can no longer get read access to Fantasy data without a manual application to Yahoo's Fantasy Sports team (see [sports.yahoo.com/developer/access](https://sports.yahoo.com/developer/access/)), and that process is geared toward commercial products rather than personal dashboards.
 
 ## Project structure
 
 ```
 fantasy-dashboard/
 ├── app.py               # Main dashboard (entry point)
-├── yahoo_auth.py         # Yahoo OAuth + Fantasy API helper
 ├── requirements.txt
 ├── .gitignore
 ├── .streamlit/

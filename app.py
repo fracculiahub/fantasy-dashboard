@@ -1,23 +1,20 @@
 """Fantasy Football Multi-League Dashboard.
 
-Consolidates rosters from Sleeper (2 leagues), ESPN (1 league), and Yahoo
-(1 league) into one command center: master roster, player exposure,
-cross-league conflicts, injury news, and a live scoreboard.
+Consolidates rosters from Sleeper (2 leagues) and ESPN (1 league) into one
+command center: master roster, player exposure, cross-league conflicts,
+injury news, and a live scoreboard.
 """
 
 from __future__ import annotations
 
 import json
 import re
-import time
 
 import pandas as pd
 import plotly.express as px
 import requests
 import streamlit as st
 from streamlit_local_storage import LocalStorage
-
-import yahoo_auth
 
 st.set_page_config(page_title="Fantasy Command Center", page_icon="🏈", layout="wide")
 
@@ -59,10 +56,10 @@ def get_secrets_section(section: str) -> dict:
 # --------------------------------------------------------------------------
 # Per-browser profile persistence (localStorage)
 #
-# Each visitor's Sleeper username, ESPN league/cookies, and Yahoo tokens are
-# saved only in their own browser's localStorage — there is no server-side
-# account system. This is what lets multiple people share one deployed app
-# URL without seeing each other's leagues or credentials.
+# Each visitor's Sleeper username and ESPN league/cookies are saved only in
+# their own browser's localStorage — there is no server-side account system.
+# This is what lets multiple people share one deployed app URL without
+# seeing each other's leagues or credentials.
 # --------------------------------------------------------------------------
 
 def _load_profile_dict(local_storage: LocalStorage) -> dict:
@@ -78,10 +75,6 @@ def _load_profile_dict(local_storage: LocalStorage) -> dict:
 def hydrate_profile_from_storage(local_storage: LocalStorage) -> None:
     # Only runs once per session (a fresh page load / reload starts a new
     # session, which is exactly when this needs to re-read localStorage).
-    # streamlit_local_storage caches its browser round-trip in
-    # st.session_state and does not reliably re-fetch mid-session even via
-    # refreshItems(), so there's no reliable way to pick up a token saved by
-    # another tab without a reload — see the Connect Yahoo caption.
     if st.session_state.get("_profile_hydrated"):
         return
     st.session_state["_profile_hydrated"] = True
@@ -90,13 +83,10 @@ def hydrate_profile_from_storage(local_storage: LocalStorage) -> None:
     for field in PROFILE_FIELDS:
         if profile.get(field) and field not in st.session_state:
             st.session_state[field] = profile[field]
-    if profile.get("yahoo_tokens") and "yahoo_tokens" not in st.session_state:
-        st.session_state["yahoo_tokens"] = profile["yahoo_tokens"]
 
 
 def save_profile_to_storage(local_storage: LocalStorage, cfg: dict) -> None:
     profile = {field: cfg.get(field, "") for field in PROFILE_FIELDS}
-    profile["yahoo_tokens"] = st.session_state.get("yahoo_tokens")
 
     snapshot = json.dumps(profile, sort_keys=True)
     if st.session_state.get("_profile_last_saved") == snapshot:
@@ -109,7 +99,6 @@ def clear_saved_profile(local_storage: LocalStorage) -> None:
     local_storage.deleteItem(PROFILE_STORAGE_KEY, key="clear_profile")
     for field in PROFILE_FIELDS:
         st.session_state.pop(field, None)
-    st.session_state.pop("yahoo_tokens", None)
     st.session_state.pop("_profile_last_saved", None)
 
 
@@ -305,42 +294,6 @@ def fetch_espn_rosters(league_id: int, year: int, espn_s2: str, swid: str, team_
 
 
 # --------------------------------------------------------------------------
-# Yahoo
-# --------------------------------------------------------------------------
-
-@st.cache_data(ttl=60 * 10, show_spinner=False)
-def fetch_yahoo_rosters(access_token: str, season: int) -> list[dict]:
-    teams = yahoo_auth.fetch_yahoo_teams(access_token, season)
-    results = []
-    for team in teams:
-        team_key = team["team_key"]
-        league_key = team["league_key"]
-        league_name = yahoo_auth.fetch_league_name(access_token, league_key)
-        players = yahoo_auth.fetch_yahoo_roster(access_token, team_key)
-        for p in players:
-            p["points"] = 0.0
-
-        opp_players = []
-        try:
-            opp_players = yahoo_auth.fetch_matchup_opponent_roster(access_token, team_key, league_key, week=0)
-        except Exception:
-            opp_players = []
-
-        results.append({
-            "league_id": league_key,
-            "league_name": league_name,
-            "platform": "Yahoo",
-            "week": None,
-            "players": players,
-            "opponent_players": opp_players,
-            "my_points": None,
-            "opp_points": None,
-            "team_name": team.get("name", "My Team"),
-        })
-    return results
-
-
-# --------------------------------------------------------------------------
 # Normalization / aggregation helpers
 # --------------------------------------------------------------------------
 
@@ -446,60 +399,9 @@ def render_sidebar(local_storage: LocalStorage):
     st.sidebar.caption("✅ Connected" if espn_ready else "❌ Not connected (needs League ID + both cookies)")
 
     st.sidebar.divider()
-    st.sidebar.subheader("Yahoo")
-    yahoo_secrets = get_secrets_section("yahoo")
-    yahoo_client_id = yahoo_secrets.get("client_id")
-    yahoo_client_secret = yahoo_secrets.get("client_secret")
-    yahoo_redirect_uri = yahoo_secrets.get("redirect_uri", "http://localhost:8501")
-
-    if not yahoo_client_id or not yahoo_client_secret:
-        st.sidebar.caption("❌ Not connected (add client_id/secret to Secrets)")
-    elif st.session_state.get("yahoo_tokens"):
-        st.sidebar.caption("✅ Connected")
-        if st.sidebar.button("Disconnect Yahoo"):
-            st.session_state.pop("yahoo_tokens", None)
-            st.rerun()
-    else:
-        query_params = st.query_params
-        code = query_params.get("code")
-        oauth_error = query_params.get("error")
-        if oauth_error:
-            st.sidebar.error(
-                f"Yahoo returned an error: {oauth_error} — {query_params.get('error_description', '')}"
-            )
-        elif code and not st.session_state.get("yahoo_tokens"):
-            try:
-                tokens = yahoo_auth.exchange_code_for_tokens(code, yahoo_client_id, yahoo_client_secret, yahoo_redirect_uri)
-                st.session_state["yahoo_tokens"] = tokens
-                st.query_params.clear()
-                st.rerun()
-            except requests.RequestException as e:
-                st.sidebar.error(f"Yahoo auth failed: {e}")
-
-        auth_url = yahoo_auth.get_authorization_url(yahoo_client_id, yahoo_redirect_uri)
-        st.sidebar.markdown(
-            # Streamlit Community Cloud renders the whole app inside its own
-            # sandboxed iframe with no allow-top-navigation flag, so both
-            # target="_top" and target="_self" get silently blocked by the
-            # browser (confirmed via console: "sandboxed... allow-top-navigation
-            # ... is not set"). target="_blank" opens a real new tab instead,
-            # which only needs allow-popups — not subject to that restriction.
-            f'<a href="{auth_url}" target="_blank" '
-            f'style="display:inline-block;padding:0.4rem 0.8rem;border-radius:0.4rem;'
-            f'background-color:#2ecc71;color:#0e1117;font-weight:600;text-decoration:none;">'
-            f"🔗 Connect Yahoo</a>",
-            unsafe_allow_html=True,
-        )
-        st.sidebar.caption(
-            "❌ Not connected — opens Yahoo in a new tab. After authorizing there, "
-            "**reload this page** (not just Sync) to pick up the connection."
-        )
-
-    st.sidebar.divider()
     if st.sidebar.button("🔄 Sync All Platforms", use_container_width=True):
         fetch_sleeper_rosters.clear()
         fetch_espn_rosters.clear()
-        fetch_yahoo_rosters.clear()
         fetch_nfl_state.clear()
         st.rerun()
 
@@ -514,9 +416,6 @@ def render_sidebar(local_storage: LocalStorage):
         "espn_team_filter": espn_team_filter,
         "espn_s2": espn_s2,
         "espn_swid": espn_swid,
-        "yahoo_client_id": yahoo_client_id,
-        "yahoo_client_secret": yahoo_client_secret,
-        "yahoo_redirect_uri": yahoo_redirect_uri,
     }
 
 
@@ -547,16 +446,6 @@ def load_all_leagues(cfg: dict) -> list[dict]:
         except Exception as e:
             st.warning(f"ESPN fetch failed: {e}")
 
-    if st.session_state.get("yahoo_tokens") and cfg["yahoo_client_id"] and cfg["yahoo_client_secret"]:
-        try:
-            tokens = yahoo_auth.ensure_valid_token(
-                st.session_state["yahoo_tokens"], cfg["yahoo_client_id"], cfg["yahoo_client_secret"], cfg["yahoo_redirect_uri"]
-            )
-            st.session_state["yahoo_tokens"] = tokens
-            all_leagues.extend(fetch_yahoo_rosters(tokens["access_token"], cfg["season"]))
-        except Exception as e:
-            st.warning(f"Yahoo fetch failed: {e}")
-
     return all_leagues
 
 
@@ -584,8 +473,8 @@ def main():
 
     k1, k2, k3, k4, k5 = st.columns(5)
     k1.metric("Total Rostered Players", len(df))
-    k2.metric("Connected Leagues", leagues_connected, help="Target: 4")
-    k3.metric("Platforms Active", platforms_active, help="Target: 3")
+    k2.metric("Connected Leagues", leagues_connected, help="Target: 3")
+    k3.metric("Platforms Active", platforms_active, help="Target: 2")
     k4.metric("Highest-Exposure Player", top_exposure)
     k5.metric("Players With Injury Flags", injury_flags)
 
