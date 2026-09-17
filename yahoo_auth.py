@@ -18,16 +18,17 @@ FANTASY_BASE = "https://fantasysports.yahooapis.com/fantasy/v2"
 
 
 def get_authorization_url(client_id: str, redirect_uri: str) -> str:
+    # No "scope" param: Yahoo's login.yahoo.com OAuth2 endpoint rejects
+    # arbitrary scope strings outright with invalid_scope (confirmed by
+    # testing "fspt-r" here, which turned out to be wrong). Yahoo Fantasy API
+    # access is instead controlled entirely by the app's own registered "API
+    # Permissions" (the Fantasy Sports checkbox on developer.yahoo.com/apps),
+    # not by anything passed in this request.
     params = {
         "client_id": client_id,
         "redirect_uri": redirect_uri,
         "response_type": "code",
         "language": "en-us",
-        # Without an explicit scope, Yahoo can hand back a token that looks
-        # valid but 401s with oauth_problem=additional_authorization_required
-        # on actual Fantasy Sports API calls, even if the app's own "API
-        # Permissions" checkbox is set. fspt-r = Fantasy Sports read.
-        "scope": "fspt-r",
     }
     return f"{AUTH_URL}?{urlencode(params)}"
 
