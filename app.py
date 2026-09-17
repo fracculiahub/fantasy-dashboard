@@ -54,6 +54,15 @@ def get_secrets_section(section: str) -> dict:
         return {}
 
 
+def get_shared_espn_cookies() -> tuple[str | None, str | None]:
+    """App-wide ESPN cookies (Secrets), used when everyone's in the same private
+    league: one member's cookies unlock read access to the whole league via
+    the API, so nobody else needs to extract their own. Falls back to
+    per-user cookies (entered in the sidebar) if this isn't configured."""
+    secrets = get_secrets_section("espn")
+    return secrets.get("espn_s2"), secrets.get("swid")
+
+
 # --------------------------------------------------------------------------
 # Accounts (Supabase-backed)
 #
@@ -452,35 +461,47 @@ def render_sidebar(supabase_cfg: tuple[str, str]):
         help="Just the numeric ID — pasting the full URL or 'leagueId=...' also works.",
     )
     espn_team_filter = st.sidebar.text_input("Your team name (filter)", value=st.session_state.get("espn_team_filter", ""))
-    espn_s2 = st.sidebar.text_input(
-        "ESPN espn_s2 cookie", value=st.session_state.get("espn_s2", ""), type="password"
-    )
-    espn_swid = st.sidebar.text_input(
-        "ESPN SWID cookie", value=st.session_state.get("espn_swid", ""), type="password"
-    )
-    st.sidebar.caption("Click 💾 Save My Settings below to store these on your account — see README for how to extract the cookies.")
+
+    shared_espn_s2, shared_espn_swid = get_shared_espn_cookies()
+    if shared_espn_s2 and shared_espn_swid:
+        espn_s2, espn_swid = shared_espn_s2, shared_espn_swid
+        st.sidebar.caption("Using shared ESPN access (configured by the app owner) — just enter your team name above.")
+    else:
+        espn_s2 = st.sidebar.text_input(
+            "ESPN espn_s2 cookie", value=st.session_state.get("espn_s2", ""), type="password"
+        )
+        espn_swid = st.sidebar.text_input(
+            "ESPN SWID cookie", value=st.session_state.get("espn_swid", ""), type="password"
+        )
+        st.sidebar.caption("Click 💾 Save My Settings below to store these on your account — see README for how to extract the cookies.")
+        st.session_state["espn_s2"] = espn_s2
+        st.session_state["espn_swid"] = espn_swid
+
     st.session_state["espn_league_id"] = espn_league_id
     st.session_state["espn_team_filter"] = espn_team_filter
-    st.session_state["espn_s2"] = espn_s2
-    st.session_state["espn_swid"] = espn_swid
     espn_ready = bool(espn_league_id) and bool(espn_s2) and bool(espn_swid)
-    st.sidebar.caption("✅ Connected" if espn_ready else "❌ Not connected (needs League ID + both cookies)")
+    if espn_ready:
+        st.sidebar.caption("✅ Connected")
+    elif shared_espn_s2 and shared_espn_swid:
+        st.sidebar.caption("❌ Not connected (needs League ID)")
+    else:
+        st.sidebar.caption("❌ Not connected (needs League ID + both cookies)")
 
     st.sidebar.divider()
     if st.sidebar.button("💾 Save My Settings", use_container_width=True, type="primary"):
+        fields_to_save = {
+            "sleeper_username": sleeper_username,
+            "espn_league_id": espn_league_id,
+            "espn_team_filter": espn_team_filter,
+        }
+        if not (shared_espn_s2 and shared_espn_swid):
+            # Only store per-user cookies when there's no app-wide shared
+            # pair -- no reason to duplicate the shared value into every
+            # account, and it'd go stale if the owner ever rotates it.
+            fields_to_save["espn_s2"] = espn_s2
+            fields_to_save["espn_swid"] = espn_swid
         try:
-            db.update_profile(
-                supabase_cfg[0],
-                supabase_cfg[1],
-                st.session_state["username"],
-                {
-                    "sleeper_username": sleeper_username,
-                    "espn_league_id": espn_league_id,
-                    "espn_team_filter": espn_team_filter,
-                    "espn_s2": espn_s2,
-                    "espn_swid": espn_swid,
-                },
-            )
+            db.update_profile(supabase_cfg[0], supabase_cfg[1], st.session_state["username"], fields_to_save)
             st.sidebar.success("Saved.")
         except requests.RequestException as e:
             st.sidebar.error(f"Save failed: {e}")

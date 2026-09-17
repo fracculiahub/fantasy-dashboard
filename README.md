@@ -2,7 +2,7 @@
 
 Consolidates your rosters from **Sleeper** (2 leagues) and **ESPN** (1 league) into one Streamlit dashboard: master roster, player exposure across leagues, cross-league matchup conflicts, injury news, and a live scoreboard.
 
-**Multiple people can use the same deployed app, each with their own account.** Everyone signs up with a username + password; their Sleeper username and ESPN league ID/cookies are stored server-side (in Supabase) keyed to their account, so it follows them across browsers/devices rather than being tied to one browser.
+**Multiple people can use the same deployed app, each with their own account.** Everyone signs up with a username + password; their Sleeper username and ESPN league ID/team name are stored server-side (in Supabase) keyed to their account, so it follows them across browsers/devices rather than being tied to one browser. ESPN cookies can either be entered per-account too, or shared app-wide if everyone's in the same private league — see the ESPN setup section below.
 
 ⚠️ **Security note:** accounts are intentionally lightweight — passwords are hashed but there's no email verification, password reset, or rate limiting. Fine for a small group of trusted testers; not meant for a public-facing app with strangers signing up.
 
@@ -42,8 +42,17 @@ Nothing to configure ahead of time — just have your Sleeper **username** ready
 1. Log in to [fantasy.espn.com](https://fantasy.espn.com) in Chrome.
 2. Press `F12` to open DevTools → **Application** tab → **Cookies** → `https://espn.com`.
 3. Find the rows named `espn_s2` and `SWID`, and copy their **Value** column (SWID includes the curly braces, e.g. `{ABC123...}`).
-4. Paste them into the **ESPN espn_s2 cookie** / **ESPN SWID cookie** fields in the app's sidebar (each person enters their own).
-5. You'll also need your ESPN **League ID** — the numeric `leagueId` in the URL when viewing your league on fantasy.espn.com. That field also accepts the full URL or a pasted `leagueId=...` fragment.
+4. You'll also need your ESPN **League ID** — the numeric `leagueId` in the URL when viewing your league on fantasy.espn.com. That field also accepts the full URL or a pasted `leagueId=...` fragment.
+
+**If everyone using this app is in the same private ESPN league** (a shared home league), only *one* member's cookies are needed — ESPN's API grants read access to the whole league to any member, not just their own team. Add them as a shared secret instead of asking every tester to extract their own:
+
+```toml
+[espn]
+espn_s2 = "one-member's-espn_s2-value"
+swid = "{that-same-member's-SWID-value}"
+```
+
+When this is set, the sidebar's cookie fields disappear entirely and everyone just enters their own **League ID + team name** to pick out their own team. If it's *not* set (or if people are actually in different ESPN leagues), each person enters their own `espn_s2`/`SWID` in the sidebar as before, saved to their own account.
 
 ### GitHub
 Create a repository named `fantasy-dashboard` (public or private).
@@ -60,6 +69,11 @@ Create `.streamlit/secrets.toml` (gitignored — never commit it):
 [supabase]
 url = "https://your-project-ref.supabase.co"
 secret_key = "paste-your-sb_secret-key-here"
+
+# Optional -- only if everyone's in the same private ESPN league (see above)
+[espn]
+espn_s2 = "one-member's-espn_s2-value"
+swid = "{that-same-member's-SWID-value}"
 ```
 
 Run it:
@@ -74,13 +88,13 @@ Sign up with any username/password, then enter your Sleeper username and ESPN Le
 
 1. Push this repo to `github.com/<you>/fantasy-dashboard`.
 2. Go to [share.streamlit.io](https://share.streamlit.io) → **New app** → pick your repo, branch `main`, main file `app.py`.
-3. In **Advanced settings → Secrets**, paste the same `[supabase]` block from above.
+3. In **Advanced settings → Secrets**, paste the same secrets block(s) from above.
 4. Deploy.
 5. Share the app URL with your testers — each person signs up for their own account and enters their own leagues.
 
 ## Notes & known quirks
 
-- **ESPN cookies expire** every ~365 days (or sooner if you log out elsewhere) — if ESPN stops loading, re-extract `espn_s2` and `SWID` and re-save them.
+- **ESPN cookies expire** every ~365 days (or sooner if you log out elsewhere) — if ESPN stops loading, re-extract `espn_s2` and `SWID` and re-save them (in Streamlit Secrets if shared app-wide, or in the sidebar if per-account).
 - **Settings only save when you click 💾 Save My Settings** — typing into the fields updates what's fetched *this session*, but won't persist to your account until you save (this avoids hitting the database on every keystroke).
 - Streamlit Cloud **does not run background jobs**, so "live" scores update whenever you (or your browser tab) refresh/reload — there's no server-side polling.
 - **Yahoo Fantasy is not supported.** Yahoo discontinued self-serve Fantasy Sports API access in 2026 — new apps can no longer get read access to Fantasy data without a manual application to Yahoo's Fantasy Sports team (see [sports.yahoo.com/developer/access](https://sports.yahoo.com/developer/access/)), and that process is geared toward commercial products rather than personal dashboards.
