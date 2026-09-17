@@ -194,6 +194,14 @@ def fetch_sleeper_rosters(username: str, season: str) -> list[dict]:
         if not my_roster:
             continue
 
+        users_by_id = {}
+        try:
+            u_resp = requests.get(f"{SLEEPER_BASE}/league/{league_id}/users", timeout=15)
+            u_resp.raise_for_status()
+            users_by_id = {u["user_id"]: (u.get("display_name") or u.get("username") or "Opponent") for u in u_resp.json()}
+        except requests.RequestException:
+            users_by_id = {}
+
         matchups = []
         try:
             m_resp = requests.get(f"{SLEEPER_BASE}/league/{league_id}/matchups/{week}", timeout=15)
@@ -214,7 +222,13 @@ def fetch_sleeper_rosters(username: str, season: str) -> list[dict]:
                 None,
             )
 
-        def build_player_list(pids, points_map):
+        opp_roster = None
+        if opp_matchup:
+            opp_roster = next((r for r in rosters if r.get("roster_id") == opp_matchup.get("roster_id")), None)
+        opp_team_name = users_by_id.get((opp_roster or {}).get("owner_id"), "Opponent")
+
+        def build_player_list(pids, points_map, starters):
+            starter_rank = {pid: i for i, pid in enumerate(starters or [])}
             out = []
             for pid in pids or []:
                 meta = players_db.get(pid, {})
@@ -227,11 +241,20 @@ def fetch_sleeper_rosters(username: str, season: str) -> list[dict]:
                     "injury_status": (meta.get("injury_status") or "ACTIVE").upper() or "ACTIVE",
                     "points": (points_map or {}).get(pid, 0.0),
                     "projected": projections.get(str(pid)),
+                    "starter": pid in starter_rank,
+                    "_lineup_order": starter_rank.get(pid, 999),
                 })
+            out.sort(key=lambda p: p["_lineup_order"])
+            for p in out:
+                p.pop("_lineup_order")
             return out
 
-        my_players = build_player_list(my_roster.get("players"), (my_matchup or {}).get("players_points", {}))
-        opp_players = build_player_list((opp_matchup or {}).get("players"), (opp_matchup or {}).get("players_points", {}))
+        my_players = build_player_list(
+            my_roster.get("players"), (my_matchup or {}).get("players_points", {}), (my_matchup or {}).get("starters")
+        )
+        opp_players = build_player_list(
+            (opp_matchup or {}).get("players"), (opp_matchup or {}).get("players_points", {}), (opp_matchup or {}).get("starters")
+        )
 
         results.append({
             "league_id": league_id,
@@ -242,6 +265,7 @@ def fetch_sleeper_rosters(username: str, season: str) -> list[dict]:
             "opponent_players": opp_players,
             "my_points": (my_matchup or {}).get("points"),
             "opp_points": (opp_matchup or {}).get("points"),
+            "opp_team_name": opp_team_name,
         })
 
     return results
@@ -268,6 +292,7 @@ def fetch_espn_rosters(league_id: int, year: int, espn_s2: str, swid: str, team_
     def normalize_players(roster):
         out = []
         for p in roster:
+            slot = getattr(p, "slot_position", None) or getattr(p, "lineupSlot", "BE")
             out.append({
                 "player_id": getattr(p, "playerId", p.name),
                 "name": p.name,
@@ -276,7 +301,9 @@ def fetch_espn_rosters(league_id: int, year: int, espn_s2: str, swid: str, team_
                 "injury_status": (getattr(p, "injuryStatus", "ACTIVE") or "ACTIVE").upper(),
                 "points": getattr(p, "points", 0.0),
                 "projected": getattr(p, "projected_points", 0.0),
+                "starter": slot not in ("BE", "IR"),
             })
+        out.sort(key=lambda p: 0 if p["starter"] else 1)
         return out
 
     my_players = normalize_players(team.roster)
@@ -284,6 +311,7 @@ def fetch_espn_rosters(league_id: int, year: int, espn_s2: str, swid: str, team_
     my_points = None
     opp_points = None
     opp_players: list[dict] = []
+    opp_team_name = "Opponent"
     week = getattr(league, "current_week", None)
     try:
         box_scores = league.box_scores(week) if week else league.box_scores()
@@ -291,10 +319,12 @@ def fetch_espn_rosters(league_id: int, year: int, espn_s2: str, swid: str, team_
             if getattr(bs.home_team, "team_id", None) == team.team_id:
                 my_points, opp_points = bs.home_score, bs.away_score
                 opp_players = normalize_players(bs.away_lineup)
+                opp_team_name = getattr(bs.away_team, "team_name", "Opponent")
                 break
             if getattr(bs.away_team, "team_id", None) == team.team_id:
                 my_points, opp_points = bs.away_score, bs.home_score
                 opp_players = normalize_players(bs.home_lineup)
+                opp_team_name = getattr(bs.home_team, "team_name", "Opponent")
                 break
     except Exception:
         pass
@@ -309,6 +339,7 @@ def fetch_espn_rosters(league_id: int, year: int, espn_s2: str, swid: str, team_
         "my_points": my_points,
         "opp_points": opp_points,
         "team_name": team.team_name,
+        "opp_team_name": opp_team_name,
     }
 
 
@@ -339,6 +370,18 @@ def leagues_to_dataframe(all_leagues: list[dict]) -> pd.DataFrame:
 
 def status_badge(status: str) -> str:
     return f"{STATUS_EMOJI.get(status, '⚪')} {status}"
+
+
+def roster_table_df(players: list[dict]) -> pd.DataFrame:
+    return pd.DataFrame([
+        {
+            "Player": p["name"],
+            "Position": p.get("position", "?"),
+            "Points": p.get("points", 0.0) or 0.0,
+            "Projected": f"{p['projected']:.1f}" if p.get("projected") is not None else "—",
+        }
+        for p in players
+    ])
 
 
 def compute_exposure(df: pd.DataFrame) -> pd.DataFrame:
@@ -612,22 +655,37 @@ def main():
         for lg in all_leagues:
             my_pts = lg.get("my_points")
             opp_pts = lg.get("opp_points")
+            my_players = lg.get("players", [])
+            opp_players = lg.get("opponent_players", [])
+
             with st.container(border=True):
-                c1, c2, c3 = st.columns([2, 1, 1])
-                c1.markdown(f"**{lg['league_name']}** · {lg['platform']}" + (f" · Week {lg['week']}" if lg.get("week") else ""))
-                c2.metric("Your Score", f"{my_pts:.1f}" if isinstance(my_pts, (int, float)) else "—")
-                c3.metric("Opponent Score", f"{opp_pts:.1f}" if isinstance(opp_pts, (int, float)) else "—")
-                if lg["players"]:
-                    roster_df = pd.DataFrame([
-                        {
-                            "Player": p["name"],
-                            "Position": p.get("position", "?"),
-                            "Points": p.get("points", 0.0),
-                            "Projected": p.get("projected") if p.get("projected") is not None else "—",
-                        }
-                        for p in lg["players"]
-                    ])
-                    st.dataframe(roster_df, use_container_width=True, hide_index=True)
+                st.markdown(f"**{lg['league_name']}** · {lg['platform']}" + (f" · Week {lg['week']}" if lg.get("week") else ""))
+
+                col_mine, col_vs, col_opp = st.columns([5, 1, 5])
+                col_mine.metric("Your Score", f"{my_pts:.1f}" if isinstance(my_pts, (int, float)) else "—")
+                col_vs.markdown("<div style='text-align:center; padding-top:1.5rem;'>⚔️</div>", unsafe_allow_html=True)
+                col_opp.metric(
+                    f"{lg.get('opp_team_name', 'Opponent')}",
+                    f"{opp_pts:.1f}" if isinstance(opp_pts, (int, float)) else "—",
+                )
+
+                col_mine, col_opp = st.columns(2)
+                for col, label, players in ((col_mine, "🟢 Your Team", my_players), (col_opp, f"🔴 {lg.get('opp_team_name', 'Opponent')}", opp_players)):
+                    with col:
+                        starters = [p for p in players if p.get("starter")]
+                        bench = [p for p in players if not p.get("starter")]
+
+                        if not players:
+                            st.caption(f"{label}: no roster data available.")
+                            continue
+
+                        st.markdown(f"**{label}**")
+                        if starters:
+                            st.caption("Starters")
+                            st.dataframe(roster_table_df(starters), use_container_width=True, hide_index=True)
+                        if bench:
+                            with st.expander(f"Bench ({len(bench)})"):
+                                st.dataframe(roster_table_df(bench), use_container_width=True, hide_index=True)
 
 
 if __name__ == "__main__":
