@@ -462,10 +462,15 @@ def render_sidebar(local_storage: LocalStorage):
             except requests.RequestException as e:
                 st.sidebar.error(f"Yahoo auth failed: {e}")
 
-        if st.sidebar.button("🔗 Connect Yahoo"):
-            auth_url = yahoo_auth.get_authorization_url(yahoo_client_id, yahoo_redirect_uri)
-            st.sidebar.markdown(f"[Click here to authorize with Yahoo]({auth_url})")
-        st.sidebar.caption("❌ Not connected")
+        auth_url = yahoo_auth.get_authorization_url(yahoo_client_id, yahoo_redirect_uri)
+        st.sidebar.markdown(
+            f'<a href="{auth_url}" target="_self" '
+            f'style="display:inline-block;padding:0.4rem 0.8rem;border-radius:0.4rem;'
+            f'background-color:#2ecc71;color:#0e1117;font-weight:600;text-decoration:none;">'
+            f"🔗 Connect Yahoo</a>",
+            unsafe_allow_html=True,
+        )
+        st.sidebar.caption("❌ Not connected — click the button above")
 
     st.sidebar.divider()
     if st.sidebar.button("🔄 Sync All Platforms", use_container_width=True):
