@@ -64,7 +64,7 @@ def get_secrets_section(section: str) -> dict:
 
 def get_supabase_config() -> tuple[str, str] | None:
     secrets = get_secrets_section("supabase")
-    url, key = secrets.get("url"), secrets.get("service_key")
+    url, key = secrets.get("url"), secrets.get("secret_key")
     if not url or not key:
         return None
     return url, key
@@ -76,7 +76,7 @@ def load_user_profile_into_session(user_row: dict) -> None:
 
 
 def render_login(supabase_cfg: tuple[str, str]) -> None:
-    supabase_url, service_key = supabase_cfg
+    supabase_url, secret_key = supabase_cfg
     st.title("🏈 Fantasy Football Command Center")
     st.caption("Sign in or create an account to save your leagues.")
 
@@ -89,7 +89,7 @@ def render_login(supabase_cfg: tuple[str, str]) -> None:
             submitted = st.form_submit_button("Log in")
         if submitted:
             try:
-                user = db.authenticate(supabase_url, service_key, username, password)
+                user = db.authenticate(supabase_url, secret_key, username, password)
             except requests.RequestException as e:
                 st.error(f"Could not reach the database: {e}")
             else:
@@ -110,7 +110,7 @@ def render_login(supabase_cfg: tuple[str, str]) -> None:
                 st.error("Username and password can't be empty.")
             else:
                 try:
-                    user = db.create_user(supabase_url, service_key, new_username, new_password)
+                    user = db.create_user(supabase_url, secret_key, new_username, new_password)
                 except db.UsernameTakenError as e:
                     st.error(str(e))
                 except requests.RequestException as e:
@@ -497,7 +497,7 @@ def main():
     if not supabase_cfg:
         st.title("🏈 Fantasy Football Command Center")
         st.error(
-            "No database configured — add a `[supabase]` section (url, service_key) to Secrets. See README."
+            "No database configured — add a `[supabase]` section (url, secret_key) to Secrets. See README."
         )
         return
 

@@ -29,7 +29,7 @@ Consolidates your rosters from **Sleeper** (2 leagues) and **ESPN** (1 league) i
      espn_swid text default ''
    );
    ```
-3. Go to **Project Settings → API**. Copy the **Project URL** and the **`service_role`** key (not the `anon` key — the service role key is what lets the app read/write the table; it's never exposed to visitors' browsers since only the server-side Streamlit app uses it).
+3. Go to **Project Settings → API Keys**, and select the **"Publishable and secret API keys"** tab. Copy the **Project URL** and the **secret key** (starts with `sb_secret_...`) — not the publishable key. The secret key is what lets the app read/write the table; it's never exposed to visitors' browsers since only the server-side Streamlit app uses it.
 
 ## 2. Set up the platforms
 
@@ -57,7 +57,7 @@ Create `.streamlit/secrets.toml` (gitignored — never commit it):
 ```toml
 [supabase]
 url = "https://your-project-ref.supabase.co"
-service_key = "paste-your-service_role-key-here"
+secret_key = "paste-your-sb_secret-key-here"
 ```
 
 Run it:

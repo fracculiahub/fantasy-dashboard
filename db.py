@@ -25,10 +25,10 @@ class UsernameTakenError(Exception):
     pass
 
 
-def _headers(service_key: str, prefer: str | None = None) -> dict:
+def _headers(secret_key: str, prefer: str | None = None) -> dict:
     headers = {
-        "apikey": service_key,
-        "Authorization": f"Bearer {service_key}",
+        "apikey": secret_key,
+        "Authorization": f"Bearer {secret_key}",
         "Content-Type": "application/json",
     }
     if prefer:
@@ -51,10 +51,10 @@ def verify_password(password: str, salt: str, expected_hash: str) -> bool:
     return digest == expected_hash
 
 
-def get_user(supabase_url: str, service_key: str, username: str) -> dict | None:
+def get_user(supabase_url: str, secret_key: str, username: str) -> dict | None:
     resp = requests.get(
         _base_url(supabase_url),
-        headers=_headers(service_key),
+        headers=_headers(secret_key),
         params={"username": f"eq.{username}", "select": "*"},
         timeout=15,
     )
@@ -63,9 +63,9 @@ def get_user(supabase_url: str, service_key: str, username: str) -> dict | None:
     return rows[0] if rows else None
 
 
-def create_user(supabase_url: str, service_key: str, username: str, password: str) -> dict:
+def create_user(supabase_url: str, secret_key: str, username: str, password: str) -> dict:
     username = username.strip()
-    if get_user(supabase_url, service_key, username):
+    if get_user(supabase_url, secret_key, username):
         raise UsernameTakenError(f"Username '{username}' is already taken.")
 
     password_hash, salt = hash_password(password)
@@ -77,7 +77,7 @@ def create_user(supabase_url: str, service_key: str, username: str, password: st
     }
     resp = requests.post(
         _base_url(supabase_url),
-        headers=_headers(service_key, prefer="return=representation"),
+        headers=_headers(secret_key, prefer="return=representation"),
         json=payload,
         timeout=15,
     )
@@ -87,8 +87,8 @@ def create_user(supabase_url: str, service_key: str, username: str, password: st
     return resp.json()[0]
 
 
-def authenticate(supabase_url: str, service_key: str, username: str, password: str) -> dict | None:
-    user = get_user(supabase_url, service_key, username.strip())
+def authenticate(supabase_url: str, secret_key: str, username: str, password: str) -> dict | None:
+    user = get_user(supabase_url, secret_key, username.strip())
     if not user:
         return None
     if not verify_password(password, user["password_salt"], user["password_hash"]):
@@ -96,11 +96,11 @@ def authenticate(supabase_url: str, service_key: str, username: str, password: s
     return user
 
 
-def update_profile(supabase_url: str, service_key: str, username: str, fields: dict) -> None:
+def update_profile(supabase_url: str, secret_key: str, username: str, fields: dict) -> None:
     body = {k: v for k, v in fields.items() if k in PROFILE_FIELDS}
     resp = requests.patch(
         _base_url(supabase_url),
-        headers=_headers(service_key, prefer="return=minimal"),
+        headers=_headers(secret_key, prefer="return=minimal"),
         params={"username": f"eq.{username}"},
         json=body,
         timeout=15,
