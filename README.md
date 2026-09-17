@@ -2,15 +2,36 @@
 
 Consolidates your rosters from **Sleeper** (2 leagues) and **ESPN** (1 league) into one Streamlit dashboard: master roster, player exposure across leagues, cross-league matchup conflicts, injury news, and a live scoreboard.
 
-**Multiple people can use the same deployed app.** Every visitor's Sleeper username and ESPN league ID/cookies are saved only in *their own browser* (via localStorage) — there's no shared account system, so friends/family can each connect their own leagues on the same URL without seeing your data or you seeing theirs. Settings persist across reloads automatically; there's a "🗑️ Clear saved settings for this browser" button in the sidebar to wipe them.
+**Multiple people can use the same deployed app, each with their own account.** Everyone signs up with a username + password; their Sleeper username and ESPN league ID/cookies are stored server-side (in Supabase) keyed to their account, so it follows them across browsers/devices rather than being tied to one browser.
+
+⚠️ **Security note:** accounts are intentionally lightweight — passwords are hashed but there's no email verification, password reset, or rate limiting. Fine for a small group of trusted testers; not meant for a public-facing app with strangers signing up.
 
 ## Prerequisites
 
 - Python 3.10+
 - A GitHub account (for deploying to Streamlit Community Cloud)
+- A free [Supabase](https://supabase.com) account (for the accounts/settings database)
 - Accounts on Sleeper and ESPN Fantasy with active leagues
 
-## 1. One-time setup per platform
+## 1. Set up the database (Supabase)
+
+1. Go to [supabase.com](https://supabase.com), sign up free, and create a new project.
+2. Once it's ready, open the **SQL Editor** (left sidebar) and run:
+   ```sql
+   create table user_profiles (
+     username text primary key,
+     password_hash text not null,
+     password_salt text not null,
+     sleeper_username text default '',
+     espn_league_id text default '',
+     espn_team_filter text default '',
+     espn_s2 text default '',
+     espn_swid text default ''
+   );
+   ```
+3. Go to **Project Settings → API**. Copy the **Project URL** and the **`service_role`** key (not the `anon` key — the service role key is what lets the app read/write the table; it's never exposed to visitors' browsers since only the server-side Streamlit app uses it).
+
+## 2. Set up the platforms
 
 ### Sleeper
 Nothing to configure ahead of time — just have your Sleeper **username** ready. You'll type it into the sidebar.
@@ -19,19 +40,25 @@ Nothing to configure ahead of time — just have your Sleeper **username** ready
 1. Log in to [fantasy.espn.com](https://fantasy.espn.com) in Chrome.
 2. Press `F12` to open DevTools → **Application** tab → **Cookies** → `https://espn.com`.
 3. Find the rows named `espn_s2` and `SWID`, and copy their **Value** column (SWID includes the curly braces, e.g. `{ABC123...}`).
-4. Paste them directly into the **ESPN espn_s2 cookie** / **ESPN SWID cookie** fields in the app's sidebar (each person using the app enters their own — these are saved to your browser only, never a shared secret).
-5. You'll also need your ESPN **League ID** — it's the numeric `leagueId` in the URL when viewing your league on fantasy.espn.com. The League ID field also accepts the full URL or a pasted `leagueId=...` fragment.
+4. Paste them into the **ESPN espn_s2 cookie** / **ESPN SWID cookie** fields in the app's sidebar (each person enters their own).
+5. You'll also need your ESPN **League ID** — the numeric `leagueId` in the URL when viewing your league on fantasy.espn.com. That field also accepts the full URL or a pasted `leagueId=...` fragment.
 
 ### GitHub
-Create a repository named `fantasy-dashboard` (public or private — Streamlit Cloud works with either, private just requires connecting your GitHub account).
+Create a repository named `fantasy-dashboard` (public or private).
 
-## 2. Local development
+## 3. Local development
 
 ```bash
 pip install -r requirements.txt
 ```
 
-No `secrets.toml` is required to run locally — everything (Sleeper username, ESPN League ID + cookies) is entered directly in the sidebar and saved to your browser.
+Create `.streamlit/secrets.toml` (gitignored — never commit it):
+
+```toml
+[supabase]
+url = "https://your-project-ref.supabase.co"
+service_key = "paste-your-service_role-key-here"
+```
 
 Run it:
 
@@ -39,19 +66,20 @@ Run it:
 streamlit run app.py
 ```
 
-In the sidebar: enter your Sleeper username, and your ESPN League ID + cookies (+ optional team name filter if the league has multiple teams you're unsure how to pick between). These get saved to your browser automatically — no need to re-enter them next time.
+Sign up with any username/password, then enter your Sleeper username and ESPN League ID + cookies in the sidebar, and click **💾 Save My Settings**. Log out and back in (or from a different browser) to confirm it's remembered.
 
-## 3. Deploy to Streamlit Community Cloud
+## 4. Deploy to Streamlit Community Cloud
 
 1. Push this repo to `github.com/<you>/fantasy-dashboard`.
 2. Go to [share.streamlit.io](https://share.streamlit.io) → **New app** → pick your repo, branch `main`, main file `app.py`.
-3. Deploy — no secrets needed.
-4. Share the app URL with friends/family — each person enters their own Sleeper username and ESPN cookies in the sidebar, saved to their browser only.
+3. In **Advanced settings → Secrets**, paste the same `[supabase]` block from above.
+4. Deploy.
+5. Share the app URL with your testers — each person signs up for their own account and enters their own leagues.
 
 ## Notes & known quirks
 
-- **ESPN cookies expire** every ~365 days (or sooner if you log out elsewhere) — if ESPN stops loading, re-extract `espn_s2` and `SWID` and re-paste them in the sidebar.
-- **Saved settings live in browser localStorage**, not on any server — clearing your browser's site data for this app, or opening it in a different browser/private window, means re-entering everything once.
+- **ESPN cookies expire** every ~365 days (or sooner if you log out elsewhere) — if ESPN stops loading, re-extract `espn_s2` and `SWID` and re-save them.
+- **Settings only save when you click 💾 Save My Settings** — typing into the fields updates what's fetched *this session*, but won't persist to your account until you save (this avoids hitting the database on every keystroke).
 - Streamlit Cloud **does not run background jobs**, so "live" scores update whenever you (or your browser tab) refresh/reload — there's no server-side polling.
 - **Yahoo Fantasy is not supported.** Yahoo discontinued self-serve Fantasy Sports API access in 2026 — new apps can no longer get read access to Fantasy data without a manual application to Yahoo's Fantasy Sports team (see [sports.yahoo.com/developer/access](https://sports.yahoo.com/developer/access/)), and that process is geared toward commercial products rather than personal dashboards.
 
@@ -60,6 +88,7 @@ In the sidebar: enter your Sleeper username, and your ESPN League ID + cookies (
 ```
 fantasy-dashboard/
 ├── app.py               # Main dashboard (entry point)
+├── db.py                 # Supabase-backed accounts + saved settings
 ├── requirements.txt
 ├── .gitignore
 ├── .streamlit/

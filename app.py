@@ -2,25 +2,26 @@
 
 Consolidates rosters from Sleeper (2 leagues) and ESPN (1 league) into one
 command center: master roster, player exposure, cross-league conflicts,
-injury news, and a live scoreboard.
+injury news, and a live scoreboard. Each person who uses this deployed app
+has their own account (username + password, stored in Supabase) so their
+league settings follow them across browsers/devices.
 """
 
 from __future__ import annotations
 
-import json
 import re
 
 import pandas as pd
 import plotly.express as px
 import requests
 import streamlit as st
-from streamlit_local_storage import LocalStorage
+
+import db
 
 st.set_page_config(page_title="Fantasy Command Center", page_icon="🏈", layout="wide")
 
 SLEEPER_BASE = "https://api.sleeper.app/v1"
-PROFILE_STORAGE_KEY = "fantasy_dashboard_profile"
-PROFILE_FIELDS = ("sleeper_username", "espn_league_id", "espn_team_filter", "espn_s2", "espn_swid")
+PROFILE_FIELDS = db.PROFILE_FIELDS
 
 STATUS_EMOJI = {
     "ACTIVE": "🟢",
@@ -54,52 +55,70 @@ def get_secrets_section(section: str) -> dict:
 
 
 # --------------------------------------------------------------------------
-# Per-browser profile persistence (localStorage)
+# Accounts (Supabase-backed)
 #
-# Each visitor's Sleeper username and ESPN league/cookies are saved only in
-# their own browser's localStorage — there is no server-side account system.
-# This is what lets multiple people share one deployed app URL without
-# seeing each other's leagues or credentials.
+# Each person gets their own username/password account. League settings are
+# stored server-side in Supabase, keyed by username, so they follow a user
+# across browsers/devices rather than being tied to one browser's storage.
 # --------------------------------------------------------------------------
 
-def _load_profile_dict(local_storage: LocalStorage) -> dict:
-    raw = local_storage.getItem(PROFILE_STORAGE_KEY)
-    if not raw:
-        return {}
-    try:
-        return json.loads(raw)
-    except (TypeError, ValueError):
-        return {}
+def get_supabase_config() -> tuple[str, str] | None:
+    secrets = get_secrets_section("supabase")
+    url, key = secrets.get("url"), secrets.get("service_key")
+    if not url or not key:
+        return None
+    return url, key
 
 
-def hydrate_profile_from_storage(local_storage: LocalStorage) -> None:
-    # Only runs once per session (a fresh page load / reload starts a new
-    # session, which is exactly when this needs to re-read localStorage).
-    if st.session_state.get("_profile_hydrated"):
-        return
-    st.session_state["_profile_hydrated"] = True
-
-    profile = _load_profile_dict(local_storage)
+def load_user_profile_into_session(user_row: dict) -> None:
     for field in PROFILE_FIELDS:
-        if profile.get(field) and field not in st.session_state:
-            st.session_state[field] = profile[field]
+        st.session_state[field] = user_row.get(field) or ""
 
 
-def save_profile_to_storage(local_storage: LocalStorage, cfg: dict) -> None:
-    profile = {field: cfg.get(field, "") for field in PROFILE_FIELDS}
+def render_login(supabase_cfg: tuple[str, str]) -> None:
+    supabase_url, service_key = supabase_cfg
+    st.title("🏈 Fantasy Football Command Center")
+    st.caption("Sign in or create an account to save your leagues.")
 
-    snapshot = json.dumps(profile, sort_keys=True)
-    if st.session_state.get("_profile_last_saved") == snapshot:
-        return
-    local_storage.setItem(PROFILE_STORAGE_KEY, snapshot, key="save_profile")
-    st.session_state["_profile_last_saved"] = snapshot
+    login_tab, signup_tab = st.tabs(["Log in", "Sign up"])
 
+    with login_tab:
+        with st.form("login_form"):
+            username = st.text_input("Username", key="login_username")
+            password = st.text_input("Password", type="password", key="login_password")
+            submitted = st.form_submit_button("Log in")
+        if submitted:
+            try:
+                user = db.authenticate(supabase_url, service_key, username, password)
+            except requests.RequestException as e:
+                st.error(f"Could not reach the database: {e}")
+            else:
+                if user:
+                    st.session_state["username"] = user["username"]
+                    load_user_profile_into_session(user)
+                    st.rerun()
+                else:
+                    st.error("Incorrect username or password.")
 
-def clear_saved_profile(local_storage: LocalStorage) -> None:
-    local_storage.deleteItem(PROFILE_STORAGE_KEY, key="clear_profile")
-    for field in PROFILE_FIELDS:
-        st.session_state.pop(field, None)
-    st.session_state.pop("_profile_last_saved", None)
+    with signup_tab:
+        with st.form("signup_form"):
+            new_username = st.text_input("Choose a username", key="signup_username")
+            new_password = st.text_input("Choose a password", type="password", key="signup_password")
+            signup_submitted = st.form_submit_button("Create account")
+        if signup_submitted:
+            if not new_username.strip() or not new_password:
+                st.error("Username and password can't be empty.")
+            else:
+                try:
+                    user = db.create_user(supabase_url, service_key, new_username, new_password)
+                except db.UsernameTakenError as e:
+                    st.error(str(e))
+                except requests.RequestException as e:
+                    st.error(f"Could not reach the database: {e}")
+                else:
+                    st.session_state["username"] = user["username"]
+                    load_user_profile_into_session(user)
+                    st.rerun()
 
 
 # --------------------------------------------------------------------------
@@ -364,8 +383,14 @@ def compute_conflicts(all_leagues: list[dict]) -> pd.DataFrame:
 # Sidebar
 # --------------------------------------------------------------------------
 
-def render_sidebar(local_storage: LocalStorage):
+def render_sidebar(supabase_cfg: tuple[str, str]):
     st.sidebar.title("🏈 League Connections")
+    st.sidebar.caption(f"Logged in as **{st.session_state['username']}**")
+    if st.sidebar.button("Log out", use_container_width=True):
+        for field in PROFILE_FIELDS:
+            st.session_state.pop(field, None)
+        st.session_state.pop("username", None)
+        st.rerun()
 
     season = st.sidebar.number_input("Season", min_value=2018, max_value=2035, value=2026, step=1)
 
@@ -390,7 +415,7 @@ def render_sidebar(local_storage: LocalStorage):
     espn_swid = st.sidebar.text_input(
         "ESPN SWID cookie", value=st.session_state.get("espn_swid", ""), type="password"
     )
-    st.sidebar.caption("Saved only in your browser — see README for how to extract these cookies.")
+    st.sidebar.caption("Click 💾 Save My Settings below to store these on your account — see README for how to extract the cookies.")
     st.session_state["espn_league_id"] = espn_league_id
     st.session_state["espn_team_filter"] = espn_team_filter
     st.session_state["espn_s2"] = espn_s2
@@ -399,14 +424,28 @@ def render_sidebar(local_storage: LocalStorage):
     st.sidebar.caption("✅ Connected" if espn_ready else "❌ Not connected (needs League ID + both cookies)")
 
     st.sidebar.divider()
+    if st.sidebar.button("💾 Save My Settings", use_container_width=True, type="primary"):
+        try:
+            db.update_profile(
+                supabase_cfg[0],
+                supabase_cfg[1],
+                st.session_state["username"],
+                {
+                    "sleeper_username": sleeper_username,
+                    "espn_league_id": espn_league_id,
+                    "espn_team_filter": espn_team_filter,
+                    "espn_s2": espn_s2,
+                    "espn_swid": espn_swid,
+                },
+            )
+            st.sidebar.success("Saved.")
+        except requests.RequestException as e:
+            st.sidebar.error(f"Save failed: {e}")
+
     if st.sidebar.button("🔄 Sync All Platforms", use_container_width=True):
         fetch_sleeper_rosters.clear()
         fetch_espn_rosters.clear()
         fetch_nfl_state.clear()
-        st.rerun()
-
-    if st.sidebar.button("🗑️ Clear saved settings for this browser", use_container_width=True):
-        clear_saved_profile(local_storage)
         st.rerun()
 
     return {
@@ -454,14 +493,22 @@ def load_all_leagues(cfg: dict) -> list[dict]:
 # --------------------------------------------------------------------------
 
 def main():
-    local_storage = LocalStorage()
-    hydrate_profile_from_storage(local_storage)
+    supabase_cfg = get_supabase_config()
+    if not supabase_cfg:
+        st.title("🏈 Fantasy Football Command Center")
+        st.error(
+            "No database configured — add a `[supabase]` section (url, service_key) to Secrets. See README."
+        )
+        return
 
-    cfg = render_sidebar(local_storage)
+    if not st.session_state.get("username"):
+        render_login(supabase_cfg)
+        return
+
+    cfg = render_sidebar(supabase_cfg)
     st.title("🏈 Fantasy Football Command Center")
 
     all_leagues = load_all_leagues(cfg)
-    save_profile_to_storage(local_storage, cfg)
     df = leagues_to_dataframe(all_leagues)
 
     # KPI cards
